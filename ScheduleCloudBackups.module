@@ -1,9 +1,14 @@
 <?php
+
+// Load dependencies
+require 'vendor/autoload.php';
+use Aws\S3\S3Client;
+
 class ScheduleCloudBackups extends WireData implements Module, ConfigurableModule {
 	public static function getModuleInfo() {
 		return array(
 			'title'		=> 'ScheduleCloudBackups',
-			'summary'	=> 'Takes a backup of your site',
+			'summary'	=> 'Backs up your site to Amazon S3',
 			'version'	=> 1,
 			'author'	=> 'David Robertson',
 			'href'		=> 'http://davidr.me/',
@@ -22,6 +27,13 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			$this->RunBackup();
 			die();
 		}
+	}
+
+	public function uploadBackup() {
+		$s3 = S3Client::factory(array(
+			'key'    => 'key here',
+			'secret' => 'secret here'
+		));
 	}
 
 	/* BACKUP CREATION */
@@ -136,7 +148,11 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 	static public function getDefaultData() {
 		return array(
 			'backupRetention'	=> '1 Week',
-			'backupHash'		=> '' // This is set at installation time anyway, but included for completeness
+			'backupHash'		=> '', // This is set at installation time anyway, but included for completeness
+
+			's3accesskey'		=> '',
+			's3secretkey'		=> '',
+			's3bucket'			=> ''
 		);
 	}
 	public function __construct() {
@@ -152,12 +168,43 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 		$fields = new InputfieldWrapper();
 
+		// Instructions
+		$field = wire('modules')->get("InputfieldMarkup");
+		$field->label = 'Instructions';
+		$field->description = "
+			To run backups, go to <a href=\"$backupurl\">$backupurl</a><br /><br />
+			Set the following to run daily as a cron job if you would like backups to run automatically:
+			<code><pre>wget -o $backupurl</pre></code>";
+		$fields->add($field);
+
+		// S3 Access key
+		$field = wire('modules')->get("InputfieldText");
+		$field->name  = 's3accesskey';
+		$field->label = 'S3 Access Key';
+		$field->attr('value', $data['s3accesskey']);
+		$field->columnWidth = 33;
+		$fields->add($field);
+		// S3 Secret key
+		$field = wire('modules')->get("InputfieldText");
+		$field->name  = 's3secretkey';
+		$field->label = 'S3 Secret Key';
+		$field->attr('value', $data['s3secretkey']);
+		$field->columnWidth = 33;
+		$fields->add($field);
+		// S3 Bucket
+		$field = wire('modules')->get("InputfieldText");
+		$field->name  = 's3bucket';
+		$field->label = 'S3 Bucket';
+		$field->attr('value', $data['s3bucket']);
+		$field->columnWidth = 33;
+		$fields->add($field);
+
 		// Retention Period
 		$field = wire('modules')->get("InputfieldSelect");
-		$field->name = 'backupRetention';
-		$field->label = 'Backup Retention Period';
-		$field->description = 'The number of days to store backups';
-		$field->value = $data['backupRetention'];
+		$field->name        = 'backupRetention';
+		$field->label       = 'Backup Retention Period';
+		$field->description = 'The length of time to keep backups';
+		$field->value       = $data['backupRetention'];
 		// Storing the options as a string so we can use strtotime.
 		// This is because 1 month and 1 year don't always contain the same number of days
 		$field->addOption('3 days', '3 days');
@@ -167,20 +214,17 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$field->addOption('3 Months', '3 Months');
 		$field->addOption('6 Months', '6 Months');
 		$field->addOption('1 Year', '1 Year');
-		$field->notes = "If you are unsure, leave set to 1 Week.
-
-		To run backups, go to [" . $backupurl . "](" . $backupurl . ")
-
-		Set the following to run daily as a cron job if you would like backups to run automatically: wget -o " . $backupurl;
 		$fields->add($field);
 
 		// Security Hash
 		$field = wire('modules')->get("InputfieldHidden");
-		$field->name = 'backupHash';
-		$field->label = 'Backup Hash';
+		$field->name        = 'backupHash';
+		$field->label       = 'Backup Hash';
 		$field->description = 'A unique hash used to run backups via a cron job';
 		$field->attr('value', $data['backupHash']);
 		$fields->add($field);
+
+
 
 		return $fields;
 	}
