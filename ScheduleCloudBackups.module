@@ -29,35 +29,67 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		}
 	}
 
-	public function uploadBackup() {
-		$s3 = S3Client::factory(array(
-			'key'    => 'key here',
-			'secret' => 'secret here'
-		));
-	}
+
 
 	/* BACKUP CREATION */
 	public function RunBackup() {
+		set_time_limit(300);
+
 		$ts = date('Ymd-His', time());
 
 		$keepfrom = strtotime("- " . $this->backupRetention); // Turns things like "1 Week" into the timestamp version of "Now - 1 Week" to determine how old the oldest backup should be
 		$keepfrom = date('Ymd-His', $keepfrom); // Converts the timestamp into the format used when naming backups
 
-		// First let's set some folder vars
-		$sitedir = wire('config')->paths->ScheduleCloudBackups . "backups/site/";
-		$dbdir 	 = wire('config')->paths->ScheduleCloudBackups . "backups/db/";
+		$sitedir = wire('config')->paths->ScheduleCloudBackups . "tmp/";
 
-		// Backup the database
-		$this->createDatabaseDump();
-
-		// Backup the site
+		// Backup the site to a tarball
 		$this->createTarball();
 
+		// Upload the tarball to S3
+		$this->uploadBackup($ts);
+
 		// Clean up after ourselves
-		$this->tidyBackups($dbdir,   $keepfrom, '.sql');
+		$this->deleteTarball();
 		$this->tidyBackups($sitedir, $keepfrom, '.tar.gz');
 	}
 
+	public function uploadBackup($ts) {
+		$config  = wire('config');
+		$name = "$ts.tar.gz";
+		$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
+
+		$s3 = S3Client::factory(array(
+			'key'    => $this->s3accesskey,
+			'secret' => $this->s3secretkey
+		));
+
+		$result = $s3->putObject(array(
+			'Bucket'     => $this->s3bucket,
+			'Key'	     => $name, // TODO: fix this
+			'SourceFile' => $tarpath
+		));
+	}
+
+	/* TARBALL */
+	private function createTarball() {
+		$config  = wire('config');
+
+		$root    = $config->paths->root;
+		$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
+
+		$cmd = "cd $root && tar -czf $tarpath --exclude site/modules/ScheduleCloudBackups/tmp --exclude site/assets/sessions *";
+
+		$this->createDatabaseDump();
+		system($cmd, $ec);
+		$this->deleteDatabaseDump();
+
+		return $ec == 0 ? true : false;
+	}
+	private static function deleteTarball() {
+		$config	= wire('config');
+		$file	= $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
+		unlink($file);
+	}
 
 
 	/* DATABASE DUMP */
@@ -84,30 +116,6 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 	}
 
 
-	/* TARBALL */
-	private function createTarball() {
-		$config		= wire('config');
-
-		$root		= $config->paths->root;
-		$tarname	= 'site_backup.tar.gz';
-		$tarpath	= $root . $tarname;
-		// $target = $sitedir . $ts . ".tar.gz";
-
-		// "--exclude '" . wire('config')->paths->ScheduleCloudBackups . "backups'";
-		$cmd = "cd $root && tar -czf $tarpath --exclude $tarname --exclude site/assets/sessions *";
-		system($cmd, $ec);
-		return $ec == 0 ? true : false;
-	}
-	private static function deleteTarball() {
-		$config	= wire('config');
-		$file	= $config->paths->root . 'site_backup.tar.gz';
-		unlink($file);
-	}
-
-
-
-
-
 
 
 
@@ -128,14 +136,14 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 
 	/* CLEANUP */
-	public function tidyBackups($path, $keepfrom, $type) {
+	public function tidyBackups($path, $keepfrom) {
 		// TODO: fix this
 
 		$filelist = scandir($path);
 
 		foreach ($filelist as $backupfile) {
-			if (stristr($backupfile, $type)) {
-				$filedate = explode($type, $backupfile);
+			if (stristr($backupfile, '.tar.gz')) {
+				$filedate = explode('.tar.gz', $backupfile);
 				if ($filedate[0] < $keepfrom) {
 					unlink($path . $backupfile);
 				}
