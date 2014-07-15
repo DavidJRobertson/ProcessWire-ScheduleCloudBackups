@@ -17,6 +17,8 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		);
 	}
 
+	public $outputEnabled = true;
+
 	public function init() {
 		// Run the backup if the correct URL is requested
 		$shouldBackup = (strpos($_SERVER['REQUEST_URI'], '/runbackup') !== FALSE) &&
@@ -24,7 +26,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 						wire('input')->get->hash == $this->backupHash;
 
 		if ($shouldBackup) {
-			$this->RunBackup();
+			$this->runBackup();
 			die();
 		}
 	}
@@ -32,15 +34,16 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 
 	/* BACKUP CREATION */
-	public function RunBackup() {
-		set_time_limit(300);
+	public function ___runBackup() {
+		ignore_user_abort(true);
+		set_time_limit(600);
 
 		$ts = date('Ymd-His', time());
-
 		$keepfrom = strtotime("- " . $this->backupRetention); // Turns things like "1 Week" into the timestamp version of "Now - 1 Week" to determine how old the oldest backup should be
 		$keepfrom = date('Ymd-His', $keepfrom); // Converts the timestamp into the format used when naming backups
 
-		$sitedir = wire('config')->paths->ScheduleCloudBackups . "tmp/";
+		$this->outputSetup();
+		$this->outputMessage("Starting backup...\n");
 
 		// Backup the site to a tarball
 		$this->createTarball();
@@ -50,10 +53,15 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 		// Clean up after ourselves
 		$this->deleteTarball();
-		$this->tidyBackups($sitedir, $keepfrom, '.tar.gz');
+		//$sitedir = wire('config')->paths->ScheduleCloudBackups . "tmp/";
+		//$this->tidyBackups($sitedir, $keepfrom, '.tar.gz');
+
+		$this->outputMessage("Backup complete.\n");
 	}
 
 	public function uploadBackup($ts) {
+		$this->outputMessage("Uploading tarball to S3...  ");
+
 		$config  = wire('config');
 		$name = "$ts.tar.gz";
 		$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
@@ -68,6 +76,8 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			'Key'	     => $name, // TODO: fix this
 			'SourceFile' => $tarpath
 		));
+
+		$this->outputMessage("Done.\n");
 	}
 
 	/* TARBALL */
@@ -80,20 +90,29 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$cmd = "cd $root && tar -czf $tarpath --exclude site/modules/ScheduleCloudBackups/tmp --exclude site/assets/sessions *";
 
 		$this->createDatabaseDump();
+
+		$this->outputMessage("Creating tarball...  ");
 		system($cmd, $ec);
+		$this->outputMessage("Done.\n");
+
 		$this->deleteDatabaseDump();
 
-		return $ec == 0 ? true : false;
+		if ($ec != 0) {
+			throw new WireException('Failed to create backup tarball.');
+		}
 	}
-	private static function deleteTarball() {
+	private function deleteTarball() {
 		$config	= wire('config');
 		$file	= $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
 		unlink($file);
+		$this->outputMessage("Removed local copy of tarball.\n");
 	}
 
 
 	/* DATABASE DUMP */
 	private function createDatabaseDump() {
+		$this->outputMessage("Dumping database...  ");
+
 		$config	= wire('config');
 
 		$host	= $config->dbHost;
@@ -103,41 +122,23 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$pass	= $config->dbPass;
 		$file	= $config->paths->root . 'data.sql';
 
-		// $target = $dbdir . $ts . ".sql";
-
 		$cmd = "mysqldump --host=$host --port=$port --user=$user --password='$pass' $name > $file";
 		system($cmd, $ec);
-		return $ec == 0 ? true : false;
+		if ($ec != 0) {
+			throw new WireException('Failed to create database dump.');
+		}
+		$this->outputMessage("Done.\n");
 	}
 	private function deleteDatabaseDump() {
 		$config	= wire('config');
 		$file	= $config->paths->root . 'data.sql';
 		unlink($file);
+		$this->outputMessage("Removed local copy of database dump.\n");
 	}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 	/* CLEANUP */
 	public function tidyBackups($path, $keepfrom) {
-		// TODO: fix this
+		// TODO: make this work with S3
 
 		$filelist = scandir($path);
 
@@ -151,6 +152,24 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		}
 	}
 
+	/* RUNTIME OUTPUT */
+	private function outputSetup() {
+		header('Content-Type: text/plain');
+		if (function_exists('apache_setenv')) {
+			@apache_setenv('no-gzip', '1');
+		}
+		@ini_set('zlib.output_compression', 'Off');
+		@ini_set('output_buffering ', '0');
+		@ini_set('implicit_flush', '1');
+		@ob_implicit_flush(true);
+		@ob_end_flush();
+	}
+	private function outputMessage($message) {
+		if ($this->outputEnabled) {
+			echo $message;
+			@ob_flush();
+		}
+	}
 
 	/* CONFIGURATION */
 	static public function getDefaultData() {
@@ -231,8 +250,6 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$field->description = 'A unique hash used to run backups via a cron job';
 		$field->attr('value', $data['backupHash']);
 		$fields->add($field);
-
-
 
 		return $fields;
 	}
