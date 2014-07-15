@@ -17,11 +17,11 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		);
 	}
 
-	public $outputEnabled = true;
+	const RUN_BACKUP_PATH = 'runbackup';
 
 	public function init() {
 		// Run the backup if the correct URL is requested
-		$shouldBackup = (strpos($_SERVER['REQUEST_URI'], '/runbackup') !== FALSE) &&
+		$shouldBackup = (strpos($_SERVER['REQUEST_URI'], self::RUN_BACKUP_PATH) !== FALSE) &&
 						wire('input')->get->hash &&
 						wire('input')->get->hash == $this->backupHash;
 
@@ -153,16 +153,20 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 	}
 
 	/* RUNTIME OUTPUT */
+	// Disabled by default
+	public $outputEnabled = false;
 	private function outputSetup() {
-		header('Content-Type: text/plain');
-		if (function_exists('apache_setenv')) {
-			@apache_setenv('no-gzip', '1');
+		if ($this->outputEnabled) {
+			header('Content-Type: text/plain');
+			if (function_exists('apache_setenv')) {
+				@apache_setenv('no-gzip', '1');
+			}
+			@ini_set('zlib.output_compression', 'Off');
+			@ini_set('output_buffering ', '0');
+			@ini_set('implicit_flush', '1');
+			@ob_implicit_flush(true);
+			@ob_end_flush();
 		}
-		@ini_set('zlib.output_compression', 'Off');
-		@ini_set('output_buffering ', '0');
-		@ini_set('implicit_flush', '1');
-		@ob_implicit_flush(true);
-		@ob_end_flush();
 	}
 	private function outputMessage($message) {
 		if ($this->outputEnabled) {
@@ -182,26 +186,24 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			's3bucket'			=> ''
 		);
 	}
-	public function __construct() {
-		// TODO: Is this actually necessary?
+	public function __construct() { // XXX: Is this actually necessary?
 		foreach(self::getDefaultData() as $key => $value) {
 			$this->$key = $value;
 		}
 	}
-
 	static public function getModuleConfigInputfields(array $data) {
 		$data = array_merge(self::getDefaultData(), $data);
-		$backupurl = wire("pages")->get("/")->httpUrl . "runbackup?hash=" . $data["backupHash"];
-
 		$fields = new InputfieldWrapper();
 
 		// Instructions
+		$backupurl = wire("pages")->get("/")->httpUrl . self::RUN_BACKUP_PATH . "?hash=" . $data["backupHash"];
 		$field = wire('modules')->get("InputfieldMarkup");
 		$field->label = 'Instructions';
 		$field->description = "
-			To run backups, go to <a href=\"$backupurl\">$backupurl</a><br /><br />
-			Set the following to run daily as a cron job if you would like backups to run automatically:
-			<code><pre>wget -o $backupurl</pre></code>";
+			<p>To take a backup, go to <a href=\"$backupurl\">$backupurl</a></p>
+
+			<p>Set the following to run as a cron job if you would like to take backups automatically:</p>
+			<code><pre>wget -o /dev/null $backupurl</pre></code>";
 		$fields->add($field);
 
 		// S3 Access key
