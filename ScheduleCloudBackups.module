@@ -1,0 +1,206 @@
+<?php
+class ScheduleCloudBackups extends WireData implements Module, ConfigurableModule {
+	public static function getModuleInfo() {
+		return array(
+			'title'		=> 'ScheduleCloudBackups',
+			'summary'	=> 'Takes a backup of your site',
+			'version'	=> 1,
+			'author'	=> 'David Robertson',
+			'href'		=> 'http://davidr.me/',
+			'singular'	=> true,
+			'autoload'	=> true
+		);
+	}
+
+	public function init() {
+		// Run the backup if the correct URL is requested
+		$shouldBackup = (strpos($_SERVER['REQUEST_URI'], '/runbackup') !== FALSE) &&
+						wire('input')->get->hash &&
+						wire('input')->get->hash == $this->backupHash;
+
+		if ($shouldBackup) {
+			$this->RunBackup();
+			die();
+		}
+	}
+
+	/* BACKUP CREATION */
+	public function RunBackup() {
+		$ts = date('Ymd-His', time());
+
+		$keepfrom = strtotime("- " . $this->backupRetention); // Turns things like "1 Week" into the timestamp version of "Now - 1 Week" to determine how old the oldest backup should be
+		$keepfrom = date('Ymd-His', $keepfrom); // Converts the timestamp into the format used when naming backups
+
+		// First let's set some folder vars
+		$sitedir = wire('config')->paths->ScheduleCloudBackups . "backups/site/";
+		$dbdir 	 = wire('config')->paths->ScheduleCloudBackups . "backups/db/";
+
+		// Backup the database
+		$this->createDatabaseDump();
+
+		// Backup the site
+		$this->createTarball();
+
+		// Clean up after ourselves
+		$this->tidyBackups($dbdir,   $keepfrom, '.sql');
+		$this->tidyBackups($sitedir, $keepfrom, '.tar.gz');
+	}
+
+
+
+	/* DATABASE DUMP */
+	private function createDatabaseDump() {
+		$config	= wire('config');
+
+		$host	= $config->dbHost;
+		$port	= $config->dbPort;
+		$name	= $config->dbName;
+		$user	= $config->dbUser;
+		$pass	= $config->dbPass;
+		$file	= $config->paths->root . 'data.sql';
+
+		// $target = $dbdir . $ts . ".sql";
+
+		$cmd = "mysqldump --host=$host --port=$port --user=$user --password='$pass' $name > $file";
+		system($cmd, $ec);
+		return $ec == 0 ? true : false;
+	}
+	private function deleteDatabaseDump() {
+		$config	= wire('config');
+		$file	= $config->paths->root . 'data.sql';
+		unlink($file);
+	}
+
+
+	/* TARBALL */
+	private function createTarball() {
+		$config		= wire('config');
+
+		$root		= $config->paths->root;
+		$tarname	= 'site_backup.tar.gz';
+		$tarpath	= $root . $tarname;
+		// $target = $sitedir . $ts . ".tar.gz";
+
+		// "--exclude '" . wire('config')->paths->ScheduleCloudBackups . "backups'";
+		$cmd = "cd $root && tar -czf $tarpath --exclude $tarname --exclude site/assets/sessions *";
+		system($cmd, $ec);
+		return $ec == 0 ? true : false;
+	}
+	private static function deleteTarball() {
+		$config	= wire('config');
+		$file	= $config->paths->root . 'site_backup.tar.gz';
+		unlink($file);
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	/* CLEANUP */
+	public function tidyBackups($path, $keepfrom, $type) {
+		// TODO: fix this
+
+		$filelist = scandir($path);
+
+		foreach ($filelist as $backupfile) {
+			if (stristr($backupfile, $type)) {
+				$filedate = explode($type, $backupfile);
+				if ($filedate[0] < $keepfrom) {
+					unlink($path . $backupfile);
+				}
+			}
+		}
+	}
+
+
+	/* CONFIGURATION */
+	static public function getDefaultData() {
+		return array(
+			'backupRetention'	=> '1 Week',
+			'backupHash'		=> '' // This is set at installation time anyway, but included for completeness
+		);
+	}
+	public function __construct() {
+		// TODO: Is this actually necessary?
+		foreach(self::getDefaultData() as $key => $value) {
+			$this->$key = $value;
+		}
+	}
+
+	static public function getModuleConfigInputfields(array $data) {
+		$data = array_merge(self::getDefaultData(), $data);
+		$backupurl = wire("pages")->get("/")->httpUrl . "runbackup?hash=" . $data["backupHash"];
+
+		$fields = new InputfieldWrapper();
+
+		// Retention Period
+		$field = wire('modules')->get("InputfieldSelect");
+		$field->name = 'backupRetention';
+		$field->label = 'Backup Retention Period';
+		$field->description = 'The number of days to store backups';
+		$field->value = $data['backupRetention'];
+		// Storing the options as a string so we can use strtotime.
+		// This is because 1 month and 1 year don't always contain the same number of days
+		$field->addOption('3 days', '3 days');
+		$field->addOption('1 Week', '1 Week');
+		$field->addOption('2 Weeks', '2 Weeks');
+		$field->addOption('1 Month', '1 Month');
+		$field->addOption('3 Months', '3 Months');
+		$field->addOption('6 Months', '6 Months');
+		$field->addOption('1 Year', '1 Year');
+		$field->notes = "If you are unsure, leave set to 1 Week.
+
+		To run backups, go to [" . $backupurl . "](" . $backupurl . ")
+
+		Set the following to run daily as a cron job if you would like backups to run automatically: wget -o " . $backupurl;
+		$fields->add($field);
+
+		// Security Hash
+		$field = wire('modules')->get("InputfieldHidden");
+		$field->name = 'backupHash';
+		$field->label = 'Backup Hash';
+		$field->description = 'A unique hash used to run backups via a cron job';
+		$field->attr('value', $data['backupHash']);
+		$fields->add($field);
+
+		return $fields;
+	}
+
+	/* MODULE INSTALLATION */
+	public function ___install() {
+		if (PHP_OS != "Linux") {
+			throw new WireException('Only Linux-based operating systems are supported.');
+		} else if (ini_get('safe_mode') || !function_exists('system')) {
+			throw new WireException('Cannot run shell commands (PHP safe mode probably enabled).');
+		}
+
+		// We need to create a secure hash for the cron job
+		$data = array(
+			'backupHash' => sha1(wire('user')->name . rand() . time() . rand())
+		);
+		wire('modules')->saveModuleConfigData('ScheduleCloudBackups', $data);
+	}
+	public function ___uninstall() {
+		// No uninstall actions necessary
+	}
+}
+?>
