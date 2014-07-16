@@ -284,7 +284,10 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 	private static function getStatus($data) {
 		if (!$data['s3accesskey'] || !$data['s3secretkey'] || !$data['s3bucket']) {
-			return "<p>Please fill in your S3 details below.</p>";
+			return "
+			<p>Please fill in your S3 details below.</p>
+
+			<a target=\"_blank\" href=\"https://github.com/DavidJRobertson/ProcessWire-ScheduleCloudBackups/blob/master/readme.md#instructions-for-setting-up-s3\">Instructions for setting up S3</a>";
 		}
 
 		try {
