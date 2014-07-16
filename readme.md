@@ -24,7 +24,7 @@ supported in the future.
       "Action": "s3:*",
       "Resource": [
           "arn:aws:s3:::YOUR_BUCKET_NAME/*",
-          "arn:aws:s3:::YOUR_BUCKET_NAME",
+          "arn:aws:s3:::YOUR_BUCKET_NAME"
       ]
     }
   ]
