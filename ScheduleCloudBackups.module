@@ -76,7 +76,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 	/* CLEANUP */
 	public function deleteOldBackups() {
-		if ($this->retaindays < 1 || $this->retaincount < 1) return; // Cleanup disabled.
+		if ($this->retaindays < 1 && $this->retaincount < 1) return; // Cleanup disabled.
 		$this->outputMessage("Cleaning up old backups...  ");
 
 		$s3 = S3Client::factory(array(
