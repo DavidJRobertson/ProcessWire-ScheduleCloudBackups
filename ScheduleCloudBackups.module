@@ -27,6 +27,10 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 						wire('input')->get->token == $this->token;
 
 		if ($shouldBackup) {
+			if (wire('input')->get->showstatus) {
+				$this->outputEnabled = true;
+			}
+
 			$this->runBackup();
 			die();
 		}
@@ -71,6 +75,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 	/* CLEANUP */
 	public function deleteOldBackups() {
+		if ($this->retaindays < 1 || $this->retaincount < 1) return; // Cleanup disabled.
 		$this->outputMessage("Cleaning up old backups...  ");
 
 		$s3 = S3Client::factory(array(
@@ -215,6 +220,13 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			<code><pre>wget -o /dev/null $backupurl</pre></code>";
 		$fields->add($field);
 
+		// Status
+		$backupurl = wire("pages")->get("/")->httpUrl . self::RUN_BACKUP_PATH . "?token=" . $data["token"];
+		$field = wire('modules')->get("InputfieldMarkup");
+		$field->label = 'Backup Status';
+		$field->description = self::getStatus($data);
+		$fields->add($field);
+
 		// S3 Access key
 		$field = wire('modules')->get("InputfieldText");
 		$field->name  = 's3accesskey';
@@ -268,6 +280,61 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$fields->add($field);
 
 		return $fields;
+	}
+
+	private static function getStatus($data) {
+		if (!$data['s3accesskey'] || !$data['s3secretkey'] || !$data['s3bucket']) {
+			return "<p>Please fill in your S3 details below.</p>";
+		}
+
+		try {
+			$out = "";
+			$s3 = S3Client::factory(array(
+				'key'    => $data['s3accesskey'],
+				'secret' => $data['s3secretkey']
+			));
+			$objects = $s3->getIterator('ListObjects', array(
+				'Bucket' => $data['s3bucket']
+			))->toArray();
+
+			if (count($objects)) {
+				$out .= "<table>";
+				$out .= "	<tr>";
+				$out .= "		<th>Date</th>";
+				$out .= "		<th>Size</th>";
+				$out .= "		<th></th>";
+				$out .= "	</tr>";
+
+				foreach ($objects as $object) {
+					$ts = date_create_from_format(self::TIMESTAMP_FORMAT, basename($object['Key'], '.tar.gz'));
+					$date = $ts->format('Y-m-d H:i:s');
+
+					$base = log($object['Size']) / log(1024);
+				    $suffixes = array(' B', ' kB', ' MB', ' GB', ' TB', ' PB', ' EB', ' ZB', ' YB'); // Heh, yottabytes...
+				    $size = round(pow(1024, $base - floor($base)), 2) . $suffixes[floor($base)];
+
+					$link = $s3->getObjectUrl($data['s3bucket'], $object['Key'], '+1 week');
+
+					$out .= "	<tr>";
+					$out .= "		<td>$date &nbsp;</td>";
+					$out .= "		<td>$size &nbsp;</td>";
+					$out .= "		<td><a href=\"$link\">Download</a> &nbsp;</td>";
+					$out .= "	</tr>";
+				}
+				$out .= "</table>";
+			} else {
+				$out .= "<p>No backups taken.</p>";
+			}
+			return $out;
+		} catch (Aws\S3\Exception\InvalidAccessKeyIdException $e) {
+			return "<p class=\"WireException\">Invalid s3 access key id!</p>";
+		} catch (Aws\S3\Exception\SignatureDoesNotMatchException $e) {
+			return "<p>Invalid s3 secret key!</p>";
+		} catch (Aws\S3\Exception\NoSuchBucketException $e) {
+			return "<p>S3 bucket does not exist!</p>";
+		} catch (Exception $e){
+			return "<code>$e</code>";
+		}
 	}
 
 	/* MODULE INSTALLATION */
