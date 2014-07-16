@@ -17,13 +17,14 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		);
 	}
 
-	const RUN_BACKUP_PATH = 'runbackup';
+	const RUN_BACKUP_PATH  = 'runbackup';
+	const TIMESTAMP_FORMAT = 'Ymd-His';
 
 	public function init() {
 		// Run the backup if the correct URL is requested
 		$shouldBackup = (strpos($_SERVER['REQUEST_URI'], self::RUN_BACKUP_PATH) !== FALSE) &&
-						wire('input')->get->hash &&
-						wire('input')->get->hash == $this->backupHash;
+						wire('input')->get->token &&
+						wire('input')->get->token == $this->token;
 
 		if ($shouldBackup) {
 			$this->runBackup();
@@ -37,61 +38,85 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 	public function ___runBackup() {
 		ignore_user_abort(true);
 		set_time_limit(600);
-
-		$ts = date('Ymd-His', time());
-		$keepfrom = strtotime("- " . $this->backupRetention); // Turns things like "1 Week" into the timestamp version of "Now - 1 Week" to determine how old the oldest backup should be
-		$keepfrom = date('Ymd-His', $keepfrom); // Converts the timestamp into the format used when naming backups
-
 		$this->outputSetup();
+
 		$this->outputMessage("Starting backup...\n");
 
-		// Backup the site to a tarball
 		$this->createTarball();
-
-		// Upload the tarball to S3
 		$this->uploadBackup($ts);
-
-		// Clean up after ourselves
 		$this->deleteTarball();
-		//$sitedir = wire('config')->paths->ScheduleCloudBackups . "tmp/";
-		//$this->tidyBackups($sitedir, $keepfrom, '.tar.gz');
+		$this->deleteOldBackups();
 
 		$this->outputMessage("Backup complete.\n");
 	}
 
-	public function uploadBackup($ts) {
+	/* AWS S3 UPLOAD */
+	public function uploadBackup() {
 		$this->outputMessage("Uploading tarball to S3...  ");
-
-		$config  = wire('config');
-		$name = "$ts.tar.gz";
-		$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
 
 		$s3 = S3Client::factory(array(
 			'key'    => $this->s3accesskey,
 			'secret' => $this->s3secretkey
 		));
 
+		$config  = wire('config');
 		$result = $s3->putObject(array(
 			'Bucket'     => $this->s3bucket,
-			'Key'	     => $name, // TODO: fix this
-			'SourceFile' => $tarpath
+			'Key'	     => date(self::TIMESTAMP_FORMAT) . '.tar.gz',
+			'SourceFile' => $config->paths->ScheduleCloudBackups . 'tmp/site_backup.tar.gz'
 		));
+
+		$this->outputMessage("Done.\n");
+	}
+
+	/* CLEANUP */
+	public function deleteOldBackups() {
+		$this->outputMessage("Cleaning up old backups...  ");
+
+		$s3 = S3Client::factory(array(
+			'key'    => $this->s3accesskey,
+			'secret' => $this->s3secretkey
+		));
+
+		$toDelete = array();
+		$n = 0;
+		$objects = array_reverse($s3->getIterator('ListObjects', array(
+			'Bucket' => $this->s3bucket
+		))->toArray());
+		foreach ($objects as $object) {
+			$n++;
+			$key   = $object['Key'];
+			$tsstr = basename($key, '.tar.gz');
+			$ts    = date_create_from_format(self::TIMESTAMP_FORMAT, $tsstr);
+			$diff  = date_diff($ts, new DateTime(), true);
+			$shouldDelete = ($this->retaindays  > 0 && $diff->d > $this->retaindays) ||
+							($this->retaincount > 0 && $n       > $this->retaincount);
+			if ($shouldDelete) {
+				$this->outputMessage("\nDeleting $key");
+				$toDelete[] = array('Key' => $key);
+			}
+		}
+
+		if (count($toDelete)) {
+			$this->outputMessage("\n");
+			$s3->deleteObjects(array(
+				'Bucket'  => $this->s3bucket,
+				'Objects' => $toDelete
+			));
+		}
 
 		$this->outputMessage("Done.\n");
 	}
 
 	/* TARBALL */
 	private function createTarball() {
-		$config  = wire('config');
-
-		$root    = $config->paths->root;
-		$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
-
-		$cmd = "cd $root && tar -czf $tarpath --exclude site/modules/ScheduleCloudBackups/tmp --exclude site/assets/sessions *";
-
 		$this->createDatabaseDump();
 
 		$this->outputMessage("Creating tarball...  ");
+		$config  = wire('config');
+		$root    = $config->paths->root;
+		$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
+		$cmd = "cd $root && tar -czf $tarpath --exclude site/modules/ScheduleCloudBackups/tmp --exclude site/assets/sessions *";
 		system($cmd, $ec);
 		$this->outputMessage("Done.\n");
 
@@ -105,6 +130,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$config	= wire('config');
 		$file	= $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
 		unlink($file);
+
 		$this->outputMessage("Removed local copy of tarball.\n");
 	}
 
@@ -114,14 +140,12 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$this->outputMessage("Dumping database...  ");
 
 		$config	= wire('config');
-
 		$host	= $config->dbHost;
 		$port	= $config->dbPort;
 		$name	= $config->dbName;
 		$user	= $config->dbUser;
 		$pass	= $config->dbPass;
 		$file	= $config->paths->root . 'data.sql';
-
 		$cmd = "mysqldump --host=$host --port=$port --user=$user --password='$pass' $name > $file";
 		system($cmd, $ec);
 		if ($ec != 0) {
@@ -133,23 +157,8 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$config	= wire('config');
 		$file	= $config->paths->root . 'data.sql';
 		unlink($file);
+
 		$this->outputMessage("Removed local copy of database dump.\n");
-	}
-
-	/* CLEANUP */
-	public function tidyBackups($path, $keepfrom) {
-		// TODO: make this work with S3
-
-		$filelist = scandir($path);
-
-		foreach ($filelist as $backupfile) {
-			if (stristr($backupfile, '.tar.gz')) {
-				$filedate = explode('.tar.gz', $backupfile);
-				if ($filedate[0] < $keepfrom) {
-					unlink($path . $backupfile);
-				}
-			}
-		}
 	}
 
 	/* RUNTIME OUTPUT */
@@ -178,12 +187,12 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 	/* CONFIGURATION */
 	static public function getDefaultData() {
 		return array(
-			'backupRetention'	=> '1 Week',
-			'backupHash'		=> '', // This is set at installation time anyway, but included for completeness
-
-			's3accesskey'		=> '',
-			's3secretkey'		=> '',
-			's3bucket'			=> ''
+			'retaindays'	=> 0,
+			'retaincount'	=> 5,
+			'token'			=> '',
+			's3accesskey'	=> '',
+			's3secretkey'	=> '',
+			's3bucket'		=> ''
 		);
 	}
 	public function __construct() { // XXX: Is this actually necessary?
@@ -196,7 +205,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$fields = new InputfieldWrapper();
 
 		// Instructions
-		$backupurl = wire("pages")->get("/")->httpUrl . self::RUN_BACKUP_PATH . "?hash=" . $data["backupHash"];
+		$backupurl = wire("pages")->get("/")->httpUrl . self::RUN_BACKUP_PATH . "?token=" . $data["token"];
 		$field = wire('modules')->get("InputfieldMarkup");
 		$field->label = 'Instructions';
 		$field->description = "
@@ -209,48 +218,53 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		// S3 Access key
 		$field = wire('modules')->get("InputfieldText");
 		$field->name  = 's3accesskey';
-		$field->label = 'S3 Access Key';
+		$field->label = 'S3 Access Key ID';
 		$field->attr('value', $data['s3accesskey']);
 		$field->columnWidth = 33;
 		$fields->add($field);
 		// S3 Secret key
 		$field = wire('modules')->get("InputfieldText");
 		$field->name  = 's3secretkey';
-		$field->label = 'S3 Secret Key';
+		$field->label = 'S3 Secret Access Key';
 		$field->attr('value', $data['s3secretkey']);
 		$field->columnWidth = 33;
 		$fields->add($field);
 		// S3 Bucket
 		$field = wire('modules')->get("InputfieldText");
 		$field->name  = 's3bucket';
-		$field->label = 'S3 Bucket';
+		$field->label = 'S3 Bucket Name';
 		$field->attr('value', $data['s3bucket']);
-		$field->columnWidth = 33;
+		$field->columnWidth = 34;
 		$fields->add($field);
 
 		// Retention Period
-		$field = wire('modules')->get("InputfieldSelect");
-		$field->name        = 'backupRetention';
-		$field->label       = 'Backup Retention Period';
-		$field->description = 'The length of time to keep backups';
-		$field->value       = $data['backupRetention'];
-		// Storing the options as a string so we can use strtotime.
-		// This is because 1 month and 1 year don't always contain the same number of days
-		$field->addOption('3 days', '3 days');
-		$field->addOption('1 Week', '1 Week');
-		$field->addOption('2 Weeks', '2 Weeks');
-		$field->addOption('1 Month', '1 Month');
-		$field->addOption('3 Months', '3 Months');
-		$field->addOption('6 Months', '6 Months');
-		$field->addOption('1 Year', '1 Year');
+		$field = wire('modules')->get("InputfieldInteger");
+		$field->name        = 'retaindays';
+		$field->label       = 'Backup Retention Period (days)';
+		$field->description = 'The number of days to keep backups. Set to 0 to disable.';
+		$field->value       = $data['retaindays'];
+		$field->min         = 0;
+		$field->inputType	= 'number';
+		$field->columnWidth = 50;
 		$fields->add($field);
 
-		// Security Hash
+		// Backup Count
+		$field = wire('modules')->get("InputfieldInteger");
+		$field->name        = 'retaincount';
+		$field->label       = 'Backup Count';
+		$field->description = 'The maximum number of backups to keep. Set to 0 to disable.';
+		$field->value       = $data['retaincount'];
+		$field->min         = 0;
+		$field->inputType	= 'number';
+		$field->columnWidth = 50;
+		$fields->add($field);
+
+		// Security Token
 		$field = wire('modules')->get("InputfieldHidden");
-		$field->name        = 'backupHash';
-		$field->label       = 'Backup Hash';
-		$field->description = 'A unique hash used to run backups via a cron job';
-		$field->attr('value', $data['backupHash']);
+		$field->name        = 'token';
+		$field->label       = 'Security Token';
+		$field->description = 'A unique token used to authenticate requests to run a backup';
+		$field->attr('value', $data['token']);
 		$fields->add($field);
 
 		return $fields;
@@ -264,11 +278,10 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			throw new WireException('Cannot run shell commands (PHP safe mode probably enabled).');
 		}
 
-		// We need to create a secure hash for the cron job
-		$data = array(
-			'backupHash' => sha1(wire('user')->name . rand() . time() . rand())
-		);
-		wire('modules')->saveModuleConfigData('ScheduleCloudBackups', $data);
+		// Create a security token
+		wire('modules')->saveModuleConfigData('ScheduleCloudBackups', array(
+			'token' => sha1(wire('user')->name . rand() . time() . rand())
+		));
 	}
 	public function ___uninstall() {
 		// No uninstall actions necessary
