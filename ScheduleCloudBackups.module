@@ -218,7 +218,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			<p>To take a backup, go to <a href=\"$backupurl\">$backupurl</a></p>
 
 			<p>Set the following to run as a cron job if you would like to take backups automatically:</p>
-			<code><pre>wget -o /dev/null $backupurl</pre></code>";
+			<code><pre>wget -qO /dev/null $backupurl</pre></code>";
 		$fields->add($field);
 
 		// Status
