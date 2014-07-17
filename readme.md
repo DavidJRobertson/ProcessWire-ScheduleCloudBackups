@@ -6,8 +6,10 @@ This module backs up your site to Amazon S3. Other storage providers may be supp
 
 * Linux-based host
 * PHP safe mode not enabled
-* Able to call system()
+* Able to call `system()`
 * `tar` and `mysqldump` must be present on your PATH
+
+---
 
 ## Instructions for setting up S3
 
