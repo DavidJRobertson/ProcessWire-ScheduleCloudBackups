@@ -21,13 +21,13 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 	const TIMESTAMP_FORMAT = 'Ymd-His';
 
 	public function init() {
-		// Run the backup if the correct URL is requested
-		$shouldBackup = (strpos($_SERVER['REQUEST_URI'], self::RUN_BACKUP_PATH) !== FALSE) &&
-						wire('input')->get->token &&
-						wire('input')->get->token == $this->token;
+		$input = wire('input');
 
+		// Run the backup if the correct URL is requested
+		$shouldBackup = ($input->get->it    == self::RUN_BACKUP_PATH) &&
+						($input->get->token == $this->token);
 		if ($shouldBackup) {
-			if (wire('input')->get->showstatus) {
+			if ($input->get->showstatus) {
 				$this->outputEnabled = true;
 			}
 
@@ -222,7 +222,6 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$fields->add($field);
 
 		// Status
-		$backupurl = wire("pages")->get("/")->httpUrl . self::RUN_BACKUP_PATH . "?token=" . $data["token"];
 		$field = wire('modules')->get("InputfieldMarkup");
 		$field->label = 'Backup Status';
 		$field->description = self::getStatus($data);
