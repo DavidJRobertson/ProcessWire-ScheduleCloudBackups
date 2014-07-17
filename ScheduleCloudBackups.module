@@ -122,8 +122,17 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$config  = wire('config');
 		$root    = $config->paths->root;
 		$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
-		$cmd = "cd $root && tar -czf $tarpath --exclude site/modules/ScheduleCloudBackups/tmp/site_backup.tar.gz --exclude site/assets/sessions * .htaccess";
+		$dotfiles = "";
+		foreach (glob("$root.?*") as $f) {
+			$n = basename($f);
+			if ($n != '..') {
+				$dotfiles .= "$n ";
+			}
+		}
+
+		$cmd = "(cd $root && tar -czf $tarpath --exclude='site/modules/ScheduleCloudBackups/tmp/site_backup.tar.gz' --exclude='site/assets/sessions/sess*' * $dotfiles)";
 		system($cmd, $ec);
+
 		$this->outputMessage("Done.\n");
 
 		$this->deleteDatabaseDump();
