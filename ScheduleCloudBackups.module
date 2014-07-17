@@ -346,6 +346,10 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			throw new WireException('Only Linux-based operating systems are supported.');
 		} else if (ini_get('safe_mode') || !function_exists('system')) {
 			throw new WireException('Cannot run shell commands (PHP safe mode probably enabled).');
+		} else if (! `which mysqldump`) {
+			throw new WireException('`mysqldump` not found.');
+		} else if (! `which tar`) {
+			throw new WireException('`tar` not found.');
 		}
 
 		// Create a security token
