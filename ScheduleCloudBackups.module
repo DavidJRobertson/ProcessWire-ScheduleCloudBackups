@@ -36,8 +36,6 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		}
 	}
 
-
-
 	/* BACKUP CREATION */
 	public function ___runBackup() {
 		header('Cache-Control: no-cache');
@@ -54,6 +52,131 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 		$this->outputMessage("Backup complete.\n");
 	}
+
+
+
+	/* DATABASE DUMP */
+	private function createDatabaseDump() {
+		$config	= wire('config');
+		$file	= $config->paths->root . 'data.sql';
+
+		if ($this->canMysqldump()) {
+			$this->outputMessage("Dumping database [mysqldump] ...  ");
+
+			$host	= $config->dbHost;
+			$port	= $config->dbPort;
+			$name	= $config->dbName;
+			$user	= $config->dbUser;
+			$pass	= $config->dbPass;
+			$cmd = "mysqldump --host=$host --port=$port --user=$user --password='$pass' $name > $file";
+			system($cmd, $ec);
+			if ($ec != 0) {
+				throw new WireException('Failed to create database dump.');
+			}
+		} else {
+			$this->outputMessage("Dumping database [php] ... ");
+
+			$handle = fopen($file, 'w+');
+			fwrite($handle, $this->backupTables());
+			fclose($handle);
+		}
+		$this->outputMessage("Done.\n");
+	}
+	private function deleteDatabaseDump() {
+		$config	= wire('config');
+		$file	= $config->paths->root . 'data.sql';
+		unlink($file);
+
+		$this->outputMessage("Removed local copy of database dump.\n");
+	}
+
+	// Adapted from the wonderful blog of David Walsh to work with ProcessWire (makes it easier that we're already connected to the DB!)
+	// Source: http://davidwalsh.name/backup-mysql-database-php
+	private function backupTables()	{
+		$tables = array();
+		$result = wire('db')->query('SHOW TABLES');
+		while ($row = mysqli_fetch_row($result))	{
+		  $tables[] = $row[0];
+		}
+
+	    foreach($tables as $table) {
+			$result = wire('db')->query("SELECT * FROM $table");
+			$num_fields = mysqli_num_fields($result);
+
+			$return .= "DROP TABLE $table;";
+			$row2    = mysqli_fetch_row(wire('db')->query("SHOW CREATE TABLE $table"));
+			$return .= "\n\n" . $row2[1] . ";\n\n";
+
+			for ($i = 0; $i < $num_fields; $i++) {
+			    while($row = mysqli_fetch_row($result)) {
+					$return.= 'INSERT INTO '.$table.' VALUES(';
+					for($j=0; $j<$num_fields; $j++) {
+			 			$row[$j] = addslashes($row[$j]);
+					    $row[$j] = ereg_replace("\n","\\n",$row[$j]);
+		 			    if (isset($row[$j])) {
+							$return.= '"'.$row[$j].'"' ;
+						} else {
+							$return.= '""';
+						}
+					    if ($j<($num_fields-1)) {
+							$return.= ',';
+						}
+					}
+					$return.= ");\n";
+		  		}
+			}
+			$return.="\n\n\n";
+	    }
+		return $return;
+	}
+
+
+
+	/* TARBALL */
+	private function createTarball() {
+		$this->createDatabaseDump();
+
+		$config  = wire('config');
+
+		if ($this->canTar()) {
+			$this->outputMessage("Creating tarball [tar] ...  ");
+
+			$root    = $config->paths->root;
+			$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
+			$dotfiles = "";
+			foreach (glob("$root.?*") as $f) {
+				$n = basename($f);
+				if ($n != '..') {
+					$dotfiles .= "$n ";
+				}
+			}
+			$cmd = "(cd $root && tar -czf $tarpath --exclude='site/modules/ScheduleCloudBackups/tmp/site_backup.tar.gz' --exclude='site/assets/sessions/sess*' * $dotfiles)";
+			system($cmd, $ec);
+
+			if ($ec != 0) {
+				$this->deleteDatabaseDump();
+				throw new WireException('Failed to create backup tarball.');
+			}
+		} else {
+			$this->outputMessage("Creating tarball [php] ...  ");
+			// TODO: PHP implementation of tar
+		}
+
+
+
+
+		$this->outputMessage("Done.\n");
+
+		$this->deleteDatabaseDump();
+	}
+	private function deleteTarball() {
+		$config	= wire('config');
+		$file	= $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
+		unlink($file);
+
+		$this->outputMessage("Removed local copy of tarball.\n");
+	}
+
 
 	/* AWS S3 UPLOAD */
 	public function uploadBackup() {
@@ -114,70 +237,9 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$this->outputMessage("Done.\n");
 	}
 
-	/* TARBALL */
-	private function createTarball() {
-		$this->createDatabaseDump();
 
-		$this->outputMessage("Creating tarball...  ");
-		$config  = wire('config');
-		$root    = $config->paths->root;
-		$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
-		$dotfiles = "";
-		foreach (glob("$root.?*") as $f) {
-			$n = basename($f);
-			if ($n != '..') {
-				$dotfiles .= "$n ";
-			}
-		}
-
-		$cmd = "(cd $root && tar -czf $tarpath --exclude='site/modules/ScheduleCloudBackups/tmp/site_backup.tar.gz' --exclude='site/assets/sessions/sess*' * $dotfiles)";
-		system($cmd, $ec);
-
-		$this->outputMessage("Done.\n");
-
-		$this->deleteDatabaseDump();
-
-		if ($ec != 0) {
-			throw new WireException('Failed to create backup tarball.');
-		}
-	}
-	private function deleteTarball() {
-		$config	= wire('config');
-		$file	= $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
-		unlink($file);
-
-		$this->outputMessage("Removed local copy of tarball.\n");
-	}
-
-
-	/* DATABASE DUMP */
-	private function createDatabaseDump() {
-		$this->outputMessage("Dumping database...  ");
-
-		$config	= wire('config');
-		$host	= $config->dbHost;
-		$port	= $config->dbPort;
-		$name	= $config->dbName;
-		$user	= $config->dbUser;
-		$pass	= $config->dbPass;
-		$file	= $config->paths->root . 'data.sql';
-		$cmd = "mysqldump --host=$host --port=$port --user=$user --password='$pass' $name > $file";
-		system($cmd, $ec);
-		if ($ec != 0) {
-			throw new WireException('Failed to create database dump.');
-		}
-		$this->outputMessage("Done.\n");
-	}
-	private function deleteDatabaseDump() {
-		$config	= wire('config');
-		$file	= $config->paths->root . 'data.sql';
-		unlink($file);
-
-		$this->outputMessage("Removed local copy of database dump.\n");
-	}
 
 	/* RUNTIME OUTPUT */
-	// Disabled by default
 	public $outputEnabled = false;
 	private function outputSetup() {
 		if ($this->outputEnabled) {
@@ -349,8 +411,23 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		}
 	}
 
+	/* CAPABILITIES */
+	private function canSystem() {
+		return false; // XXX
+		return !ini_get('safe_mode') && function_exists('system');
+	}
+	private function canMysqldump() {
+		return $this->canSystem() && `which mysqldump`;
+	}
+	private function canTar() {
+		die('notar');
+		return $this->canSystem() && `which tar`;
+	}
+
+
 	/* MODULE INSTALLATION */
 	public function ___install() {
+		/*
 		if (PHP_OS != "Linux") {
 			throw new WireException('Only Linux-based operating systems are supported.');
 		} else if (ini_get('safe_mode')) {
@@ -362,6 +439,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		} else if (! `which tar`) {
 			throw new WireException('`tar` not found.');
 		}
+		*/
 
 		// Create a security token
 		wire('modules')->saveModuleConfigData('ScheduleCloudBackups', array(
