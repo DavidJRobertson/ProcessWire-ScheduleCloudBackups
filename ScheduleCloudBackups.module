@@ -61,7 +61,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$file	= $config->paths->root . 'data.sql';
 
 		if ($this->canMysqldump()) {
-			$this->outputMessage("Dumping database [mysqldump] ...  ");
+			$this->outputMessage("Dumping database [mysqldump]...  ");
 
 			$host	= $config->dbHost;
 			$port	= $config->dbPort;
@@ -74,14 +74,13 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 				throw new WireException('Failed to create database dump.');
 			}
 		} else {
-			$this->outputMessage("Dumping database [php] ... ");
+			$this->outputMessage("Dumping database [php]... ");
 
 			$handle = fopen($file, 'w+');
 			fwrite($handle, $this->phpMysqldump());
 			fclose($handle);
 		}
 		$this->outputMessage("Done.\n");
-		die();
 	}
 	private function deleteDatabaseDump() {
 		$config	= wire('config');
@@ -152,11 +151,11 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$this->createDatabaseDump();
 
 		$config  = wire('config');
+		$root    = $config->paths->root;
 
 		if ($this->canTar()) {
-			$this->outputMessage("Creating tarball [tar] ...  ");
+			$this->outputMessage("Creating tarball [tar]...  ");
 
-			$root    = $config->paths->root;
 			$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
 			$dotfiles = "";
 			foreach (glob("$root.?*") as $f) {
@@ -173,13 +172,16 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 				throw new WireException('Failed to create backup tarball.');
 			}
 		} else {
-			$this->outputMessage("Creating tarball [php] ...  ");
-			// TODO: PHP implementation of tar
+			$this->outputMessage("Creating tarball [php]...  ");
+
+			$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar";
+			unlink($tarpath);
+			unlink("$tarpath.gz");
+			$archive = new PharData($tarpath);
+			$archive->buildFromDirectory($root);
+			$archive->compress(Phar::GZ);
+			unlink($tarpath);
 		}
-
-
-
-
 		$this->outputMessage("Done.\n");
 
 		$this->deleteDatabaseDump();
@@ -428,7 +430,6 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 
 	/* CAPABILITIES */
 	private function canSystem() {
-		return false; // XXX
 		return !ini_get('safe_mode') && function_exists('system');
 	}
 	private function canMysqldump() {
