@@ -16,7 +16,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		return array(
 			'title'		=> 'ScheduleCloudBackups',
 			'summary'	=> 'Backs up your site to Amazon S3',
-			'version'	=> 1,
+			'version'	=> 2,
 			'author'	=> 'David Robertson',
 			'href'		=> 'https://github.com/DavidJRobertson/ProcessWire-ScheduleCloudBackups',
 			'singular'	=> true,
