@@ -1,4 +1,11 @@
 <?php
+/**
+ * ScheduleCloudBackups for ProcessWire
+ * @author David Robertson
+ *
+ * @link http://modules.processwire.com/modules/schedule-cloud-backups
+ * @link https://github.com/DavidJRobertson/ProcessWire-ScheduleCloudBackups
+ */
 
 // Load dependencies
 require 'vendor/autoload.php';
@@ -60,7 +67,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$config	= wire('config');
 		$file	= $config->paths->root . 'data.sql';
 
-		if ($this->canMysqldump()) {
+		if (self::canMysqldump()) {
 			$this->outputMessage("Dumping database [mysqldump]...  ");
 
 			$host	= $config->dbHost;
@@ -153,7 +160,7 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$config  = wire('config');
 		$root    = $config->paths->root;
 
-		if ($this->canTar()) {
+		if (self::canTar()) {
 			$this->outputMessage("Creating tarball [tar]...  ");
 
 			$tarpath = $config->paths->ScheduleCloudBackups . "tmp/site_backup.tar.gz";
@@ -254,6 +261,16 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 		$this->outputMessage("Done.\n");
 	}
 
+	/* CAPABILITIES */
+	private static function canSystem() {
+		return !ini_get('safe_mode') && function_exists('system');
+	}
+	private static function canMysqldump() {
+		return self::canSystem() && `which mysqldump`;
+	}
+	private static function canTar() {
+		return self::canSystem() && `which tar`;
+	}
 
 
 	/* RUNTIME OUTPUT */
@@ -416,6 +433,19 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			} else {
 				$out .= "<p>No backups taken.</p>";
 			}
+
+			$out .= "<p>";
+			if (self::canMysqldump()) {
+				$out .= "Using native `mysqldump`. ";
+			} else {
+				$out .= "Using pure-PHP mysqldump. ";
+			}
+			if (self::canTar()) {
+				$out .= "Using native `tar`. ";
+			} else {
+				$out .= "Using pure-PHP tar. ";
+			}
+			$out .= "</p>";
 			return $out;
 		} catch (Aws\S3\Exception\InvalidAccessKeyIdException $e) {
 			return "<p class=\"WireException\">Invalid s3 access key id!</p>";
@@ -427,18 +457,6 @@ class ScheduleCloudBackups extends WireData implements Module, ConfigurableModul
 			return "<code>$e</code>";
 		}
 	}
-
-	/* CAPABILITIES */
-	private function canSystem() {
-		return !ini_get('safe_mode') && function_exists('system');
-	}
-	private function canMysqldump() {
-		return $this->canSystem() && `which mysqldump`;
-	}
-	private function canTar() {
-		return $this->canSystem() && `which tar`;
-	}
-
 
 	/* MODULE INSTALLATION */
 	public function ___install() {
