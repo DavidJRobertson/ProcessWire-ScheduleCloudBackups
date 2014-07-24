@@ -2,12 +2,10 @@
 
 This module backs up your site to Amazon S3. Other storage providers may be supported in the future.
 
-## Requirements
+If `mysqldump` and `tar` are present on your PATH and can be run from PHP, they will be used.
+Otherwise, a pure-PHP fallback will be used to create the backups.
 
-* Linux-based host
-* PHP safe mode not enabled
-* Able to call `system()`
-* `tar` and `mysqldump` must be present on your PATH
+Not tested on Windblows.
 
 ---
 
